@@ -40,6 +40,12 @@ Same format as [xm-yolo-offsite](https://github.com/xompass/xompass-xm-yolo-offs
 
 Jsonmeta image. Same format as meta-image in [xm-yolo-offsite](https://github.com/xompass/xompass-xm-yolo-offsite).
 
+## Testing
+
+```
+./test.sh image.jpg
+```
+
 ---
 
 ## Build
