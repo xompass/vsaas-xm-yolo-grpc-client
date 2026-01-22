@@ -282,6 +282,7 @@ async fn main() {
             xedge::Event::IncomingGate(gate, data) => {
                 if gate != "image" {
                     warn!("Expecting gate 'image'. Got '{gate}'.");
+                    continue;
                 }
                 let permit = match backpressure.clone().try_acquire_owned() {
                     Ok(permit) => permit,
