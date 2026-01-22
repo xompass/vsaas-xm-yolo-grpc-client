@@ -5,6 +5,8 @@ ifeq ($(version),)
 endif
 endif
 
+version:=$(version)-$(shell git rev-parse --short HEAD)
+
 project=$(shell ./project-name.sh)
 docker_image=$(shell ./docker-name.sh)
 
@@ -16,7 +18,7 @@ AMD64=x86_64-unknown-linux-musl
 all: all-docker
 
 # docker.target
-docker.%: 
+docker.%:
 	cross build --release --target $*
 	# hack to replace entrypoint	
 	mkdir -p buildtmp

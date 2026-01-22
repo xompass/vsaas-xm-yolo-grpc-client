@@ -1,2 +1,4 @@
-[target.aarch64-unknown-linux-musl]
-image = "rustembedded/cross:aarch64-unknown-linux-musl"
+[build]
+pre-build = [
+    "apt update && apt-get -y install protobuf-compiler"
+]
