@@ -46,4 +46,7 @@ for detection in detections:
                         bbox.get("h", 512)/2,bbox["x"] + bbox.get("w", 512)/2,
                         bbox["y"] + bbox.get("h", 512)/2], width=2)
 
-img.save(args.output)
+if args.output == "-":
+    img.save(sys.stdout, format="jpeg")
+else:
+    img.save(args.output)
