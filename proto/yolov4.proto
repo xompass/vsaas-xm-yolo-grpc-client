@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package yv4service;
+
+message Image {
+    bytes data = 1;
+}
+
+message AbsoluteFrame {
+    uint32 x = 1;
+    uint32 y = 2;
+    uint32 w = 3;
+    uint32 h = 4;
+}
+
+message AbsoluteDetection {
+    string class = 1;
+    float probability = 2;
+    AbsoluteFrame frame = 3;
+}
+
+service YOLOV4 {
+    rpc Detect(Image) returns (stream AbsoluteDetection);
+}

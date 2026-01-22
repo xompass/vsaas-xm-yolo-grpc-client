@@ -1,0 +1,28 @@
+[package]
+name = "vsaas-xm-yolo-grpc-client"
+version = "0.0.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+xedge = { git = "ssh://git@github.com/xompass/xompass-xedge-api-rust.git", tag = "v0.5.1", features = ["signal"] }
+xompassutil = { git = "ssh://git@github.com/xompass/xompassutil-rs.git" }
+tokio = { version = "1.49.0", default-features = false, features = ["rt", "macros"] }
+log = "0.4"
+env_logger = "0.11"
+structopt = "0.3.26"
+bytes = "1.11.0"
+serde_json = "1.0.149"
+serde = { version = "1.0.228", features = ["derive"] }
+chrono = { version = "0.4.43", features = ["serde"] }
+ureq = { version = "3.1.4", features = ["json"] }
+url = "2.5.8"
+anyhow = "1.0.100"
+
+[dependencies.xompass-object-detection]
+git = "ssh://git@github.com/xompass/xompass-object-detection.git"
+rev = "e915a87"
+default-features = false
+features = ["grpc"]
+
