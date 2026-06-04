@@ -99,11 +99,14 @@ struct Datum {
     frame: Frame,
 }
 
+#[derive(Debug)]
+struct RelativeBbox;
+
 impl Datum {
-    fn from_detection(detection: Detection) -> Datum {
+    fn try_from_detection(detection: Detection) -> Result<Datum, RelativeBbox> {
         let bbox = detection.bbox;
         if bbox.relative {
-            panic!("unexpected: bbox.relative=true")
+            return Err(RelativeBbox);
         }
         let frame = Frame {
             x: (bbox.left + bbox.width / 2.) as u32,
@@ -111,11 +114,11 @@ impl Datum {
             w: bbox.width as u32,
             h: bbox.height as u32,
         };
-        Datum {
+        Ok(Datum {
             class: detection.class.into_owned(),
             frame,
             probability: detection.prob,
-        }
+        })
     }
 }
 
@@ -167,7 +170,17 @@ async fn process_input(
         Ok(Ok(detections)) => {
             let request_t = start.elapsed();
             let post = Instant::now();
-            let transformed = detections.into_iter().map(Datum::from_detection).collect();
+            let transformed: Vec<_> = match detections
+                .into_iter()
+                .map(Datum::try_from_detection)
+                .collect::<Result<_, _>>()
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    error!("transform detections: {e:#?}");
+                    return;
+                }
+            };
             let output = OutputPayload {
                 ts: input.json.ts.to_epoch(),
                 asset_id: &input.json.asset_id,
@@ -257,7 +270,8 @@ async fn main() {
         };
     }
     log::info!("xedge v{}", xedge::version());
-    let mut module = xedge::Module::from_env_with_signals([SIGINT, SIGTERM]).unwrap();
+    let mut module = xedge::Module::from_env_with_signals([SIGINT, SIGTERM])
+        .expect("xedge env vars should be set");
     let mut running_tasks: Vec<JoinHandle<()>> = vec![];
     let backpressure = Arc::new(Semaphore::new(opt.backpressure));
     let config = GrpcConfig {
@@ -310,7 +324,12 @@ async fn main() {
                 if sig == SIGINT || sig == SIGTERM {
                     info!("Waiting on all running tasks");
                     for task in running_tasks {
-                        task.await.expect("running task panicked");
+                        // NOTE: ignore cancelled join error
+                        if let Err(join_err) = task.await
+                            && let Ok(reason) = join_err.try_into_panic()
+                        {
+                            std::panic::resume_unwind(reason);
+                        }
                     }
                     break;
                 }
