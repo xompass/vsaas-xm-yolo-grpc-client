@@ -3285,7 +3285,7 @@ dependencies = [
 [[package]]
 name = "xompass-object-detection"
 version = "0.1.0"
-source = "git+ssh://git@github.com/xompass/xompass-object-detection.git?rev=4abc92b#4abc92b80b656baa832de66da1782d45bbdb7ed0"
+source = "git+ssh://git@github.com/xompass/xompass-object-detection.git?rev=f469655#f469655d174d33f06d60640f57148a296d16c3c5"
 dependencies = [
  "async-trait",
  "image",
