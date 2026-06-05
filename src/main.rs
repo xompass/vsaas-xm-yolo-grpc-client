@@ -46,6 +46,13 @@ struct Opt {
     grpc_url: Vec<Url>,
     #[structopt(long, help = "how many inputs can be processed concurrently")]
     backpressure: usize,
+    #[structopt(
+        long,
+        alias = "xedge-auth",
+        default_value_t = false,
+        help = "authenticate with xedge credentials)"
+    )]
+    xedge_authentication: bool,
 }
 
 impl Opt {
@@ -276,10 +283,9 @@ async fn main() {
     let backpressure = Arc::new(Semaphore::new(opt.backpressure));
     let config = GrpcConfig {
         url: opt.grpc_url,
-        // NOTE: netsize is used only for method netsize, which is not used by Grpc.
-        // If resize feature is to be added, this should be changed.
         netsize: (0, 0),
         token,
+        xedge_auth: opt.xedge_authentication,
     };
     let grpc = match Grpc::from_config(&config) {
         Ok(grpc) => grpc,
