@@ -51,6 +51,12 @@ struct Opt {
         help = "move license plate detections to dedicated sink 'isolated-license-plates'"
     )]
     isolate_license_plates: bool,
+    #[structopt(
+        long,
+        alias = "xedge-auth",
+        help = "authenticate with xedge credentials)"
+    )]
+    xedge_authentication: bool,
 }
 
 impl Opt {
@@ -311,6 +317,7 @@ async fn main() {
         // If resize feature is to be added, this should be changed.
         netsize: (0, 0),
         token,
+        xedge_auth: opt.xedge_authentication,
     };
     let grpc = match Grpc::from_config(&config) {
         Ok(grpc) => grpc,
