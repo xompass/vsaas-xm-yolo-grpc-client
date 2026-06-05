@@ -22,7 +22,7 @@ anyhow = "1.0.100"
 
 [dependencies.xompass-object-detection]
 git = "ssh://git@github.com/xompass/xompass-object-detection.git"
-rev = "4abc92b"
+rev = "f469655"
 default-features = false
 features = ["grpc"]
 
