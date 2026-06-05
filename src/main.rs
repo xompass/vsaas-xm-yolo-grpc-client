@@ -49,7 +49,6 @@ struct Opt {
     #[structopt(
         long,
         alias = "xedge-auth",
-        default_value_t = false,
         help = "authenticate with xedge credentials)"
     )]
     xedge_authentication: bool,
