@@ -54,7 +54,7 @@ struct Opt {
     #[structopt(
         long,
         alias = "xedge-auth",
-        help = "authenticate with xedge credentials)"
+        help = "authenticate with xedge credentials"
     )]
     xedge_authentication: bool,
 }
