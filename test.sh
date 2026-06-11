@@ -17,6 +17,7 @@ params="
 --grpc-timeout-s 10
 --grpc-url https://grpc.xompass.com
 --xedge-authentication
+--isolate-license-plates
 "
 cargo run -- $params 2>&1 | while read line; do
     echoerr "$line"
@@ -47,11 +48,15 @@ cargo run -- $params 2>&1 | while read line; do
             "ts": 0,
             "asset_id": "test"
         }'  | jq -cj \
-            | cat - dog.jpg \
+            | cat - tinta.jpg \
             | mosquitto_pub -t xedge/default/modules/producer/sinks/o -s
         mosquitto_sub -t xedge/default/modules/$XEDGE_MODULE_NAME/sinks/detections -C 1 \
             | python3 strip_jsonmeta.py \
             | display - &
+        timeout 5s mosquitto_sub -t xedge/default/modules/$XEDGE_MODULE_NAME/sinks/isolated-license-plates -C 1 \
+            | python3 strip_jsonmeta.py >/dev/null \
+            && echoerr "OK: got isolated license plates" \
+            || echoerr "FAILED: did not get isolated license plate" &
         payload_sent=true
         set +x
     fi

@@ -48,8 +48,13 @@ struct Opt {
     backpressure: usize,
     #[structopt(
         long,
+        help = "move license plate detections to dedicated sink 'isolated-license-plates'"
+    )]
+    isolate_license_plates: bool,
+    #[structopt(
+        long,
         alias = "xedge-auth",
-        help = "authenticate with xedge credentials)"
+        help = "authenticate with xedge credentials"
     )]
     xedge_authentication: bool,
 }
@@ -169,6 +174,7 @@ async fn process_input(
     timeout: Duration,
     mut grpc: Grpc,
     writer: xedge::Writer,
+    isolate_license_plates: bool,
 ) {
     let jpg_bytes = JpgBytes(input.image().to_vec());
     let start = Instant::now();
@@ -176,7 +182,7 @@ async fn process_input(
         Ok(Ok(detections)) => {
             let request_t = start.elapsed();
             let post = Instant::now();
-            let transformed: Vec<_> = match detections
+            let mut transformed: Vec<_> = match detections
                 .into_iter()
                 .map(Datum::try_from_detection)
                 .collect::<Result<_, _>>()
@@ -187,6 +193,12 @@ async fn process_input(
                     return;
                 }
             };
+            let mut plate_detections = Vec::new();
+            if isolate_license_plates {
+                plate_detections = transformed
+                    .extract_if(.., |datum| &datum.class == "license_plate")
+                    .collect();
+            }
             let output = OutputPayload {
                 ts: input.json.ts.to_epoch(),
                 asset_id: &input.json.asset_id,
@@ -206,6 +218,25 @@ async fn process_input(
                     );
                 }
                 Err(e) => error!("output serialize: {e:?}"),
+            }
+            if !plate_detections.is_empty() {
+                let output = OutputPayload {
+                    ts: input.json.ts.to_epoch(),
+                    asset_id: &input.json.asset_id,
+                    // NOTE: backwards-compatible
+                    path: "",
+                    data: plate_detections,
+                };
+
+                match serde_json::to_vec(&output) {
+                    Ok(mut payload) => {
+                        payload.extend(input.image());
+                        if let Err(e) = writer.write("isolated-license-plates", &payload).await {
+                            error!("mqtt: {e:?}");
+                        }
+                    }
+                    Err(e) => error!("output serialize: {e:?}"),
+                }
             }
         }
         Ok(Err(grpc_error)) => error!("grpc: {grpc_error:?}"),
@@ -282,6 +313,8 @@ async fn main() {
     let backpressure = Arc::new(Semaphore::new(opt.backpressure));
     let config = GrpcConfig {
         url: opt.grpc_url,
+        // NOTE: netsize is used only for method netsize, which is not used by Grpc.
+        // If resize feature is to be added, this should be changed.
         netsize: (0, 0),
         token,
         xedge_auth: opt.xedge_authentication,
@@ -321,6 +354,7 @@ async fn main() {
                     Duration::from_secs(opt.grpc_timeout_s),
                     grpc.clone(),
                     module.writer(),
+                    opt.isolate_license_plates,
                 ));
                 running_tasks.push(task);
             }
