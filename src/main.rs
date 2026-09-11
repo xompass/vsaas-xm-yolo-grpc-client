@@ -227,8 +227,8 @@ impl FromStr for ImageShape {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut split = s.split('x');
-        let error_msg = format!("Bad shape format, expected '<w>x<h>' ('608x608'), got {s}");
+        let mut split = s.split(',');
+        let error_msg = format!("Bad shape format, expected 'w,h' ('608,608'), got {s}");
         let w = split.next().ok_or_else(|| error_msg.clone())?;
         let h = split.next().ok_or_else(|| error_msg.clone())?;
         if split.next().is_some() {
