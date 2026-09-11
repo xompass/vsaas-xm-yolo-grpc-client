@@ -1,10 +1,14 @@
 use anyhow::bail;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use image::{ImageReader, codecs::jpeg};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
-    env, mem, process,
+    borrow::Cow,
+    env,
+    io::Cursor,
+    mem, process,
     str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
@@ -139,6 +143,16 @@ struct OutputPayload<'a> {
     data: Vec<Datum>,
 }
 
+#[derive(thiserror::Error, Debug)]
+enum ValidationError {
+    #[error("Image: {0}")]
+    Image(#[from] image::ImageError),
+    #[error("IO: {0}")]
+    IO(#[from] std::io::Error),
+    #[error("Task: {0}")]
+    Task(#[from] tokio::task::JoinError),
+}
+
 struct ValidatedInput {
     data: Bytes,
     imfrom: usize,
@@ -148,6 +162,39 @@ struct ValidatedInput {
 impl ValidatedInput {
     fn image(&self) -> &[u8] {
         &self.data[self.imfrom..]
+    }
+
+    async fn resized_image(
+        &self,
+        ImageShape(width, height): ImageShape,
+    ) -> Result<(Cow<'_, [u8]>, Option<(f32, f32)>), ValidationError> {
+        let reader = ImageReader::new(Cursor::new(self.image().to_vec())).with_guessed_format()?;
+        let decoded_image = tokio::task::spawn_blocking(|| reader.decode()).await??;
+        let (original_width, original_height) = (decoded_image.width(), decoded_image.height());
+        let resized_image = if original_width != width || original_height != height {
+            tokio::task::spawn_blocking(move || {
+                decoded_image.resize_exact(width, height, image::imageops::FilterType::Triangle)
+            })
+            .await?
+        } else {
+            return Ok((Cow::Borrowed(self.image()), None));
+        };
+
+        let mut img_bytes: Vec<u8> = vec![];
+        jpeg::JpegEncoder::new(&mut img_bytes).encode(
+            resized_image.as_bytes(),
+            resized_image.width(),
+            resized_image.height(),
+            resized_image.color().into(),
+        )?;
+
+        Ok((
+            Cow::Owned(img_bytes),
+            Some((
+                original_width as f32 / resized_image.width() as f32,
+                original_height as f32 / resized_image.height() as f32,
+            )),
+        ))
     }
 }
 
@@ -167,7 +214,7 @@ fn validated_input(data: Bytes) -> Option<ValidatedInput> {
 }
 
 #[derive(Clone, Copy)]
-struct ImageShape(usize, usize);
+struct ImageShape(u32, u32);
 
 impl FromStr for ImageShape {
     type Err = String;
@@ -180,8 +227,8 @@ impl FromStr for ImageShape {
         if split.next().is_some() {
             return Err(error_msg);
         }
-        let w = usize::from_str(w).map_err(|e| e.to_string())?;
-        let h = usize::from_str(h).map_err(|e| e.to_string())?;
+        let w = u32::from_str(w).map_err(|e| e.to_string())?;
+        let h = u32::from_str(h).map_err(|e| e.to_string())?;
         Ok(ImageShape(w, h))
     }
 }
