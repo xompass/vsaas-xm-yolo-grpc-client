@@ -27,6 +27,8 @@ OPTIONS:
         --grpc-url <grpc-url>...                           one or more grpc urls
         --token-from-credential <token-from-credential>    credential id @ vsaas.ai
         --token-timeout-s <token-timeout-s>                timeout for retrieving token in secs [default: 10]
+        --isolate-license-plates                           enable isolation of license-plate detections over a dedicated sink 
+        --resize-to <w,h>                                  enable the resize of image to be sent for detection
 
 ```
 
