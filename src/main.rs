@@ -46,11 +46,8 @@ struct Opt {
     grpc_url: Vec<Url>,
     #[structopt(long, help = "how many inputs can be processed concurrently")]
     backpressure: usize,
-    #[structopt(
-        long,
-        help = "move license plate detections to dedicated sink 'isolated-license-plates'"
-    )]
-    isolate_license_plates: bool,
+    #[structopt(flatten)]
+    input_process_config: InputProcessConfig,
     #[structopt(
         long,
         alias = "xedge-auth",
@@ -168,16 +165,28 @@ fn validated_input(data: Bytes) -> Option<ValidatedInput> {
     Some(ValidatedInput { data, imfrom, json })
 }
 
+#[derive(StructOpt, Clone, Copy)]
+struct InputProcessConfig {
+    #[structopt(
+        long,
+        help = "move license plate detections to dedicated sink 'isolated-license-plates'"
+    )]
+    isolate_license_plates: bool,
+}
+
 async fn process_input(
     input: ValidatedInput,
     _permit: OwnedSemaphorePermit,
     timeout: Duration,
     mut grpc: Grpc,
     writer: xedge::Writer,
-    isolate_license_plates: bool,
+    input_process_config: InputProcessConfig,
 ) {
     let jpg_bytes = JpgBytes(input.image().to_vec());
     let start = Instant::now();
+    let InputProcessConfig {
+        isolate_license_plates,
+    } = input_process_config;
     match time::timeout(timeout, grpc.detect(jpg_bytes)).await {
         Ok(Ok(detections)) => {
             let request_t = start.elapsed();
@@ -354,7 +363,7 @@ async fn main() {
                     Duration::from_secs(opt.grpc_timeout_s),
                     grpc.clone(),
                     module.writer(),
-                    opt.isolate_license_plates,
+                    opt.input_process_config,
                 ));
                 running_tasks.push(task);
             }
