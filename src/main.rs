@@ -257,14 +257,19 @@ async fn process_input(
     timeout: Duration,
     mut grpc: Grpc,
     writer: xedge::Writer,
-    input_process_config: InputProcessConfig,
-) {
-    let jpg_bytes = JpgBytes(input.image().to_vec());
-    let start = Instant::now();
-    let InputProcessConfig {
+    InputProcessConfig {
         isolate_license_plates,
         resize_to,
-    } = input_process_config;
+    }: InputProcessConfig,
+) {
+    let (jpg_bytes, resize_ratios) = match resize_to {
+        Some(shape) => {
+            let (img_bytes, ratios) = input.resized_image(shape).await.unwrap();
+            (JpgBytes(img_bytes.to_vec()), ratios)
+        }
+        None => (JpgBytes(input.image().to_vec()), None),
+    };
+    let start = Instant::now();
     match time::timeout(timeout, grpc.detect(jpg_bytes)).await {
         Ok(Ok(detections)) => {
             let request_t = start.elapsed();
@@ -280,6 +285,9 @@ async fn process_input(
                     return;
                 }
             };
+            if let Some(ratios) = resize_ratios {
+                transformed.iter_mut().for_each(|d| d.resize_frame(ratios));
+            }
             let mut plate_detections = Vec::new();
             if isolate_license_plates {
                 plate_detections = transformed
