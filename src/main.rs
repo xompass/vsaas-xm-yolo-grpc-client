@@ -5,6 +5,7 @@ use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
     env, mem, process,
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -165,6 +166,26 @@ fn validated_input(data: Bytes) -> Option<ValidatedInput> {
     Some(ValidatedInput { data, imfrom, json })
 }
 
+#[derive(Clone, Copy)]
+struct ImageShape(usize, usize);
+
+impl FromStr for ImageShape {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut split = s.split('x');
+        let error_msg = format!("Bad shape format, expected '<w>x<h>' ('608x608'), got {s}");
+        let w = split.next().ok_or_else(|| error_msg.clone())?;
+        let h = split.next().ok_or_else(|| error_msg.clone())?;
+        if split.next().is_some() {
+            return Err(error_msg);
+        }
+        let w = usize::from_str(w).map_err(|e| e.to_string())?;
+        let h = usize::from_str(h).map_err(|e| e.to_string())?;
+        Ok(ImageShape(w, h))
+    }
+}
+
 #[derive(StructOpt, Clone, Copy)]
 struct InputProcessConfig {
     #[structopt(
@@ -172,6 +193,8 @@ struct InputProcessConfig {
         help = "move license plate detections to dedicated sink 'isolated-license-plates'"
     )]
     isolate_license_plates: bool,
+    #[structopt(long, help = "shape to resize image before sending to detect")]
+    resize_to: Option<ImageShape>,
 }
 
 async fn process_input(
@@ -186,6 +209,7 @@ async fn process_input(
     let start = Instant::now();
     let InputProcessConfig {
         isolate_license_plates,
+        resize_to,
     } = input_process_config;
     match time::timeout(timeout, grpc.detect(jpg_bytes)).await {
         Ok(Ok(detections)) => {
