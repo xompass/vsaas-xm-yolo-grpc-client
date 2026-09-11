@@ -133,6 +133,13 @@ impl Datum {
             probability: detection.prob,
         })
     }
+
+    fn resize_frame(&mut self, (width_ratio, height_ratio): (f32, f32)) {
+        self.frame.x = (self.frame.x as f32 * width_ratio) as u32;
+        self.frame.w = (self.frame.w as f32 * width_ratio) as u32;
+        self.frame.y = (self.frame.y as f32 * height_ratio) as u32;
+        self.frame.h = (self.frame.h as f32 * height_ratio) as u32;
+    }
 }
 
 #[derive(Serialize)]
