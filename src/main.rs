@@ -158,6 +158,8 @@ enum ValidationError {
     IO(#[from] std::io::Error),
     #[error("Task: {0}")]
     Task(#[from] tokio::task::JoinError),
+    #[error("Image already resized")]
+    Resized,
 }
 
 struct ValidatedInput {
@@ -176,32 +178,37 @@ impl ValidatedInput {
         ImageShape(width, height): ImageShape,
     ) -> Result<(Cow<'_, [u8]>, Option<(f32, f32)>), ValidationError> {
         let reader = ImageReader::new(Cursor::new(self.image().to_vec())).with_guessed_format()?;
-        let decoded_image = tokio::task::spawn_blocking(|| reader.decode()).await??;
-        let (original_width, original_height) = (decoded_image.width(), decoded_image.height());
-        let resized_image = if original_width != width || original_height != height {
-            tokio::task::spawn_blocking(move || {
+        let res = tokio::task::spawn_blocking(move || {
+            let decoded_image = reader.decode()?;
+            let (original_width, original_height) = (decoded_image.width(), decoded_image.height());
+            let resized_image = if original_width != width || original_height != height {
                 decoded_image.resize_exact(width, height, image::imageops::FilterType::Triangle)
-            })
-            .await?
+            } else {
+                return Err(ValidationError::Resized);
+            };
+
+            let mut img_bytes: Vec<u8> = vec![];
+            jpeg::JpegEncoder::new(&mut img_bytes).encode(
+                resized_image.as_bytes(),
+                resized_image.width(),
+                resized_image.height(),
+                resized_image.color().into(),
+            )?;
+            Ok((
+                Cow::Owned(img_bytes),
+                Some((
+                    original_width as f32 / resized_image.width() as f32,
+                    original_height as f32 / resized_image.height() as f32,
+                )),
+            ))
+        })
+        .await?;
+        if matches!(res, Err(ValidationError::Resized)) {
+            log::debug!("Image already resized, using original");
+            Ok((Cow::Borrowed(self.image()), None))
         } else {
-            return Ok((Cow::Borrowed(self.image()), None));
-        };
-
-        let mut img_bytes: Vec<u8> = vec![];
-        jpeg::JpegEncoder::new(&mut img_bytes).encode(
-            resized_image.as_bytes(),
-            resized_image.width(),
-            resized_image.height(),
-            resized_image.color().into(),
-        )?;
-
-        Ok((
-            Cow::Owned(img_bytes),
-            Some((
-                original_width as f32 / resized_image.width() as f32,
-                original_height as f32 / resized_image.height() as f32,
-            )),
-        ))
+            res
+        }
     }
 }
 
