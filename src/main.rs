@@ -1,7 +1,7 @@
 use anyhow::bail;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use image::{ImageReader, codecs::jpeg};
+use image::{ImageReader, codecs::jpeg, imageops::FilterType};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -158,6 +158,8 @@ enum ValidationError {
     IO(#[from] std::io::Error),
     #[error("Task: {0}")]
     Task(#[from] tokio::task::JoinError),
+    #[error("Resize filter type: {0}")]
+    Filter(String),
     #[error("Image already resized")]
     Resized,
 }
@@ -176,13 +178,14 @@ impl ValidatedInput {
     async fn resized_image(
         &self,
         ImageShape(width, height): ImageShape,
+        resize_filter_type: FilterType,
     ) -> Result<(Cow<'_, [u8]>, Option<(f32, f32)>), ValidationError> {
         let reader = ImageReader::new(Cursor::new(self.image().to_vec())).with_guessed_format()?;
         let res = tokio::task::spawn_blocking(move || {
             let decoded_image = reader.decode()?;
             let (original_width, original_height) = (decoded_image.width(), decoded_image.height());
             let resized_image = if original_width != width || original_height != height {
-                decoded_image.resize_exact(width, height, image::imageops::FilterType::Triangle)
+                decoded_image.resize_exact(width, height, resize_filter_type)
             } else {
                 return Err(ValidationError::Resized);
             };
@@ -247,6 +250,44 @@ impl FromStr for ImageShape {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FilterTypeArg {
+    Nearest,
+    Triangle,
+    CatmullRom,
+    Gaussian,
+    Lanczos3,
+}
+
+impl FromStr for FilterTypeArg {
+    type Err = ValidationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "nearest" => Ok(FilterTypeArg::Nearest),
+            "triangle" => Ok(FilterTypeArg::Triangle),
+            "catmullrom" => Ok(FilterTypeArg::CatmullRom),
+            "gaussian" => Ok(FilterTypeArg::Gaussian),
+            "lanczos3" => Ok(FilterTypeArg::Lanczos3),
+            _ => Err(ValidationError::Filter(
+                "Invalid, options are 'nearest', 'triangle', 'catmullrom', 'gaussian', 'lanczos3'"
+                    .to_string(),
+            )),
+        }
+    }
+}
+
+impl From<FilterTypeArg> for FilterType {
+    fn from(value: FilterTypeArg) -> Self {
+        match value {
+            FilterTypeArg::Nearest => FilterType::Nearest,
+            FilterTypeArg::Triangle => FilterType::Triangle,
+            FilterTypeArg::CatmullRom => FilterType::CatmullRom,
+            FilterTypeArg::Gaussian => FilterType::Gaussian,
+            FilterTypeArg::Lanczos3 => FilterType::Lanczos3,
+        }
+    }
+}
 #[derive(StructOpt, Clone, Copy)]
 struct InputProcessConfig {
     #[structopt(
@@ -256,6 +297,12 @@ struct InputProcessConfig {
     isolate_license_plates: bool,
     #[structopt(long, help = "shape to resize image before sending to detect")]
     resize_to: Option<ImageShape>,
+    #[structopt(
+        long,
+        help = "resize algorithm to use, options are 'nearest', 'triangle', 'catmullrom', 'gaussian', 'lanczos3'",
+        default_value = "triangle"
+    )]
+    resize_filter_type: FilterTypeArg,
 }
 
 async fn process_input(
@@ -267,17 +314,19 @@ async fn process_input(
     InputProcessConfig {
         isolate_license_plates,
         resize_to,
+        resize_filter_type,
     }: InputProcessConfig,
 ) {
     let (jpg_bytes, resize_ratios) = match resize_to {
         Some(shape) => {
-            let (img_bytes, ratios) = match input.resized_image(shape).await {
-                Ok(res) => res,
-                Err(e) => {
-                    log::warn!("Failed to resize image, falling back to original: {e}");
-                    (Cow::Owned(input.image().to_vec()), None)
-                }
-            };
+            let (img_bytes, ratios) =
+                match input.resized_image(shape, resize_filter_type.into()).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        log::warn!("Failed to resize image, falling back to original: {e}");
+                        (Cow::Owned(input.image().to_vec()), None)
+                    }
+                };
             (JpgBytes(img_bytes.to_vec()), ratios)
         }
         None => (JpgBytes(input.image().to_vec()), None),

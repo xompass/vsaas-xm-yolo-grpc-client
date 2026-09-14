@@ -29,6 +29,7 @@ OPTIONS:
         --token-timeout-s <token-timeout-s>                timeout for retrieving token in secs [default: 10]
         --isolate-license-plates                           enable isolation of license-plate detections over a dedicated sink 
         --resize-to <w,h>                                  enable the resize of image to be sent for detection
+        --resize-filter-type <filter-name>                 set the filter type to use in resize operation. Options are 'nearest', 'triangle', 'catmullrom', 'gaussian', 'lanczos3'; default to triangle.
 
 ```
 
