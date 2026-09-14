@@ -264,7 +264,13 @@ async fn process_input(
 ) {
     let (jpg_bytes, resize_ratios) = match resize_to {
         Some(shape) => {
-            let (img_bytes, ratios) = input.resized_image(shape).await.unwrap();
+            let (img_bytes, ratios) = match input.resized_image(shape).await {
+                Ok(res) => res,
+                Err(e) => {
+                    log::warn!("Failed to resize image, falling back to original: {e}");
+                    (Cow::Owned(input.image().to_vec()), None)
+                }
+            };
             (JpgBytes(img_bytes.to_vec()), ratios)
         }
         None => (JpgBytes(input.image().to_vec()), None),
