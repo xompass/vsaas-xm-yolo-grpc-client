@@ -496,6 +496,7 @@ async fn main() {
         url: opt.grpc_url,
         // NOTE: netsize is used only for method netsize, which is not used by Grpc.
         // If resize feature is to be added, this should be changed.
+        // This is independent from --resize-to added in this client
         netsize: (0, 0),
         token,
         xedge_auth: opt.xedge_authentication,
