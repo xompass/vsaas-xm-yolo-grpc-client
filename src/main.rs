@@ -324,7 +324,7 @@ async fn process_input(
                     Ok(res) => res,
                     Err(e) => {
                         log::warn!("Failed to resize image, falling back to original: {e}");
-                        (Cow::Owned(input.image().to_vec()), None)
+                        (Cow::Borrowed(input.image()), None)
                     }
                 };
             (JpgBytes(img_bytes.to_vec()), ratios)
