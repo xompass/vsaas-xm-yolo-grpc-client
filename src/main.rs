@@ -160,8 +160,8 @@ enum ValidationError {
     Task(#[from] tokio::task::JoinError),
     #[error("Resize filter type: {0}")]
     Filter(String),
-    #[error("Image already resized")]
-    Resized,
+    #[error("Image already target size")]
+    AlreadyTargetSize,
 }
 
 struct ValidatedInput {
@@ -187,7 +187,7 @@ impl ValidatedInput {
             let resized_image = if original_width != width || original_height != height {
                 decoded_image.resize_exact(width, height, resize_filter_type)
             } else {
-                return Err(ValidationError::Resized);
+                return Err(ValidationError::AlreadyTargetSize);
             };
 
             let mut img_bytes: Vec<u8> = vec![];
@@ -206,8 +206,8 @@ impl ValidatedInput {
             ))
         })
         .await?;
-        if matches!(res, Err(ValidationError::Resized)) {
-            log::debug!("Image already resized, using original");
+        if matches!(res, Err(ValidationError::AlreadyTargetSize)) {
+            log::debug!("Image already target size, using original");
             Ok((Cow::Borrowed(self.image()), None))
         } else {
             res
