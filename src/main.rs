@@ -10,7 +10,7 @@ use std::{
     io::Cursor,
     mem, process,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 use structopt::StructOpt;
@@ -233,6 +233,24 @@ fn validated_input(data: Bytes) -> Option<ValidatedInput> {
 #[derive(Clone, Copy)]
 struct ImageShape(u32, u32);
 
+static MIN_DIM: LazyLock<u32> = LazyLock::new(|| match env::var("MIN_DIM") {
+    Ok(d) => u32::from_str(&d).unwrap_or_else(|_| {
+        log::warn!("Failed to parse MIN_DIM. Expected <u32> got {d}. Falling back to default (32)");
+        32
+    }),
+    Err(_) => 32,
+});
+
+static MAX_DIM: LazyLock<u32> = LazyLock::new(|| match env::var("MAX_DIM") {
+    Ok(d) => u32::from_str(&d).unwrap_or_else(|_| {
+        log::warn!(
+            "Failed to parse MAX_DIM. Expected <u32> got {d}. Falling back to default (3840)"
+        );
+        3840
+    }),
+    Err(_) => 3840,
+});
+
 impl FromStr for ImageShape {
     type Err = String;
 
@@ -246,6 +264,12 @@ impl FromStr for ImageShape {
         }
         let w = u32::from_str(w).map_err(|e| e.to_string())?;
         let h = u32::from_str(h).map_err(|e| e.to_string())?;
+        if !(*MIN_DIM..=*MAX_DIM).contains(&w) || !(*MIN_DIM..=*MAX_DIM).contains(&h) {
+            return Err(format!(
+                "Invalid shape.  {} <= w | h <= {}. Note: min/max values can be overwritten with env vars MIN_DIM/MAX_DIM",
+                *MIN_DIM, *MAX_DIM
+            ));
+        }
         Ok(ImageShape(w, h))
     }
 }
