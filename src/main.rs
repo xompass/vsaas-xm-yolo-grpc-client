@@ -1,11 +1,16 @@
 use anyhow::bail;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use image::{ImageReader, codecs::jpeg, imageops::FilterType};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
-    env, mem, process,
-    sync::Arc,
+    borrow::Cow,
+    env,
+    io::Cursor,
+    mem, process,
+    str::FromStr,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 use structopt::StructOpt;
@@ -46,11 +51,8 @@ struct Opt {
     grpc_url: Vec<Url>,
     #[structopt(long, help = "how many inputs can be processed concurrently")]
     backpressure: usize,
-    #[structopt(
-        long,
-        help = "move license plate detections to dedicated sink 'isolated-license-plates'"
-    )]
-    isolate_license_plates: bool,
+    #[structopt(flatten)]
+    input_process_config: InputProcessConfig,
     #[structopt(
         long,
         alias = "xedge-auth",
@@ -131,6 +133,13 @@ impl Datum {
             probability: detection.prob,
         })
     }
+
+    fn resize_frame(&mut self, (width_ratio, height_ratio): (f32, f32)) {
+        self.frame.x = (self.frame.x as f32 * width_ratio) as u32;
+        self.frame.w = (self.frame.w as f32 * width_ratio) as u32;
+        self.frame.y = (self.frame.y as f32 * height_ratio) as u32;
+        self.frame.h = (self.frame.h as f32 * height_ratio) as u32;
+    }
 }
 
 #[derive(Serialize)]
@@ -139,6 +148,20 @@ struct OutputPayload<'a> {
     asset_id: &'a str,
     path: &'a str,
     data: Vec<Datum>,
+}
+
+#[derive(thiserror::Error, Debug)]
+enum ValidationError {
+    #[error("Image: {0}")]
+    Image(#[from] image::ImageError),
+    #[error("IO: {0}")]
+    IO(#[from] std::io::Error),
+    #[error("Task: {0}")]
+    Task(#[from] tokio::task::JoinError),
+    #[error("Resize filter type: {0}")]
+    Filter(String),
+    #[error("Image already target size")]
+    AlreadyTargetSize,
 }
 
 struct ValidatedInput {
@@ -150,6 +173,45 @@ struct ValidatedInput {
 impl ValidatedInput {
     fn image(&self) -> &[u8] {
         &self.data[self.imfrom..]
+    }
+
+    async fn resized_image(
+        &self,
+        ImageShape(width, height): ImageShape,
+        resize_filter_type: FilterType,
+    ) -> Result<(Cow<'_, [u8]>, Option<(f32, f32)>), ValidationError> {
+        let reader = ImageReader::new(Cursor::new(self.image().to_vec())).with_guessed_format()?;
+        let res = tokio::task::spawn_blocking(move || {
+            let decoded_image = reader.decode()?;
+            let (original_width, original_height) = (decoded_image.width(), decoded_image.height());
+            let resized_image = if original_width != width || original_height != height {
+                decoded_image.resize_exact(width, height, resize_filter_type)
+            } else {
+                return Err(ValidationError::AlreadyTargetSize);
+            };
+
+            let mut img_bytes: Vec<u8> = vec![];
+            jpeg::JpegEncoder::new(&mut img_bytes).encode(
+                resized_image.as_bytes(),
+                resized_image.width(),
+                resized_image.height(),
+                resized_image.color().into(),
+            )?;
+            Ok((
+                Cow::Owned(img_bytes),
+                Some((
+                    original_width as f32 / resized_image.width() as f32,
+                    original_height as f32 / resized_image.height() as f32,
+                )),
+            ))
+        })
+        .await?;
+        if matches!(res, Err(ValidationError::AlreadyTargetSize)) {
+            log::debug!("Image already target size, using original");
+            Ok((Cow::Borrowed(self.image()), None))
+        } else {
+            res
+        }
     }
 }
 
@@ -168,15 +230,131 @@ fn validated_input(data: Bytes) -> Option<ValidatedInput> {
     Some(ValidatedInput { data, imfrom, json })
 }
 
+#[derive(Clone, Copy)]
+struct ImageShape(u32, u32);
+
+static MIN_DIM: LazyLock<u32> = LazyLock::new(|| match env::var("MIN_DIM") {
+    Ok(d) => u32::from_str(&d).unwrap_or_else(|_| {
+        log::warn!("Failed to parse MIN_DIM. Expected <u32> got {d}. Falling back to default (32)");
+        32
+    }),
+    Err(_) => 32,
+});
+
+static MAX_DIM: LazyLock<u32> = LazyLock::new(|| match env::var("MAX_DIM") {
+    Ok(d) => u32::from_str(&d).unwrap_or_else(|_| {
+        log::warn!(
+            "Failed to parse MAX_DIM. Expected <u32> got {d}. Falling back to default (3840)"
+        );
+        3840
+    }),
+    Err(_) => 3840,
+});
+
+impl FromStr for ImageShape {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut split = s.split(',');
+        let error_msg = format!("Bad shape format, expected 'w,h' ('608,608'), got {s}");
+        let w = split.next().ok_or_else(|| error_msg.clone())?;
+        let h = split.next().ok_or_else(|| error_msg.clone())?;
+        if split.next().is_some() {
+            return Err(error_msg);
+        }
+        let w = u32::from_str(w).map_err(|e| e.to_string())?;
+        let h = u32::from_str(h).map_err(|e| e.to_string())?;
+        if !(*MIN_DIM..=*MAX_DIM).contains(&w) || !(*MIN_DIM..=*MAX_DIM).contains(&h) {
+            return Err(format!(
+                "Invalid shape.  {} <= w | h <= {}. Note: min/max values can be overwritten with env vars MIN_DIM/MAX_DIM",
+                *MIN_DIM, *MAX_DIM
+            ));
+        }
+        Ok(ImageShape(w, h))
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FilterTypeArg {
+    Nearest,
+    Triangle,
+    CatmullRom,
+    Gaussian,
+    Lanczos3,
+}
+
+impl FromStr for FilterTypeArg {
+    type Err = ValidationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "nearest" => Ok(FilterTypeArg::Nearest),
+            "triangle" => Ok(FilterTypeArg::Triangle),
+            "catmullrom" => Ok(FilterTypeArg::CatmullRom),
+            "gaussian" => Ok(FilterTypeArg::Gaussian),
+            "lanczos3" => Ok(FilterTypeArg::Lanczos3),
+            _ => Err(ValidationError::Filter(
+                "Invalid, options are 'nearest', 'triangle', 'catmullrom', 'gaussian', 'lanczos3'"
+                    .to_string(),
+            )),
+        }
+    }
+}
+
+impl From<FilterTypeArg> for FilterType {
+    fn from(value: FilterTypeArg) -> Self {
+        match value {
+            FilterTypeArg::Nearest => FilterType::Nearest,
+            FilterTypeArg::Triangle => FilterType::Triangle,
+            FilterTypeArg::CatmullRom => FilterType::CatmullRom,
+            FilterTypeArg::Gaussian => FilterType::Gaussian,
+            FilterTypeArg::Lanczos3 => FilterType::Lanczos3,
+        }
+    }
+}
+#[derive(StructOpt, Clone, Copy)]
+struct InputProcessConfig {
+    #[structopt(
+        long,
+        help = "move license plate detections to dedicated sink 'isolated-license-plates'"
+    )]
+    isolate_license_plates: bool,
+    #[structopt(long, help = "shape to resize image before sending to detect")]
+    resize_to: Option<ImageShape>,
+    #[structopt(
+        long,
+        help = "resize algorithm to use, options are 'nearest', 'triangle', 'catmullrom', 'gaussian', 'lanczos3'",
+        default_value = "triangle"
+    )]
+    resize_filter_type: FilterTypeArg,
+}
+
 async fn process_input(
     input: ValidatedInput,
     _permit: OwnedSemaphorePermit,
     timeout: Duration,
     mut grpc: Grpc,
     writer: xedge::Writer,
-    isolate_license_plates: bool,
+    InputProcessConfig {
+        isolate_license_plates,
+        resize_to,
+        resize_filter_type,
+    }: InputProcessConfig,
 ) {
-    let jpg_bytes = JpgBytes(input.image().to_vec());
+    let (jpg_bytes, resize_ratios) = match resize_to {
+        Some(shape) => {
+            let (img_bytes, ratios) =
+                match input.resized_image(shape, resize_filter_type.into()).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        log::warn!("Failed to resize image, falling back to original: {e}");
+                        (Cow::Borrowed(input.image()), None)
+                    }
+                };
+            (JpgBytes(img_bytes.to_vec()), ratios)
+        }
+        None => (JpgBytes(input.image().to_vec()), None),
+    };
     let start = Instant::now();
     match time::timeout(timeout, grpc.detect(jpg_bytes)).await {
         Ok(Ok(detections)) => {
@@ -193,6 +371,9 @@ async fn process_input(
                     return;
                 }
             };
+            if let Some(ratios) = resize_ratios {
+                transformed.iter_mut().for_each(|d| d.resize_frame(ratios));
+            }
             let mut plate_detections = Vec::new();
             if isolate_license_plates {
                 plate_detections = transformed
@@ -315,6 +496,7 @@ async fn main() {
         url: opt.grpc_url,
         // NOTE: netsize is used only for method netsize, which is not used by Grpc.
         // If resize feature is to be added, this should be changed.
+        // This is independent from --resize-to added in this client
         netsize: (0, 0),
         token,
         xedge_auth: opt.xedge_authentication,
@@ -354,7 +536,7 @@ async fn main() {
                     Duration::from_secs(opt.grpc_timeout_s),
                     grpc.clone(),
                     module.writer(),
-                    opt.isolate_license_plates,
+                    opt.input_process_config,
                 ));
                 running_tasks.push(task);
             }
